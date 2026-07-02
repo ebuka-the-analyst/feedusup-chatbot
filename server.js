@@ -2,23 +2,21 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
-import OpenAI from "openai";
 
 dotenv.config();
 
 const app = express();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+app.set("trust proxy", 1);
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
-  .map((origin) => origin.trim());
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 const models = [
-  process.env.OPENAI_MODEL_PRIMARY || "gpt-5.2",
-  process.env.OPENAI_MODEL_SECONDARY || "gpt-5.2-chat-latest",
+  process.env.OPENAI_MODEL_PRIMARY || "gpt-5-mini",
+  process.env.OPENAI_MODEL_SECONDARY || "gpt-5-mini",
   process.env.OPENAI_MODEL_FALLBACK || "gpt-5-mini"
 ];
 
@@ -37,9 +35,8 @@ app.use(cors({
 app.use(rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  message: {
-    error: "Too many messages. Please try again shortly."
-  }
+  standardHeaders: true,
+  legacyHeaders: false
 }));
 
 const SYSTEM_PROMPT = `
@@ -52,7 +49,7 @@ Main areas:
 - UK: supporting elderly and isolated people with food, groceries and essential household items.
 - Haiti: supporting schools, hospitals, churches and community organisations with supplies.
 
-You help users with:
+Help users with:
 - donating money
 - donating food, items or equipment
 - volunteering
@@ -69,33 +66,67 @@ Rules:
 - For contact, send users to https://feedusup.org.uk/pages/contact
 `;
 
-async function generateReply(message, history) {
+function extractReply(data) {
+  if (data.output_text) return data.output_text;
+
+  const textParts = [];
+
+  if (Array.isArray(data.output)) {
+    data.output.forEach((item) => {
+      if (Array.isArray(item.content)) {
+        item.content.forEach((content) => {
+          if (content.text) textParts.push(content.text);
+        });
+      }
+    });
+  }
+
+  return textParts.join("\n").trim() || "Sorry, I could not answer that.";
+}
+
+async function callOpenAI(model, message, history) {
   const recentHistory = history
     .slice(-8)
     .map((item) => `${item.role}: ${item.content}`)
     .join("\n");
 
-  let lastError;
-
-  for (const model of models) {
-    try {
-      const response = await openai.responses.create({
-        model,
-        instructions: SYSTEM_PROMPT,
-        input: `
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+      "Accept-Encoding": "identity"
+    },
+    body: JSON.stringify({
+      model,
+      instructions: SYSTEM_PROMPT,
+      input: `
 Previous conversation:
 ${recentHistory || "None"}
 
 User message:
 ${message}
-        `,
-        max_output_tokens: 350
-      });
+      `,
+      max_output_tokens: 350
+    })
+  });
 
-      return {
-        reply: response.output_text || "Sorry, I could not answer that.",
-        model
-      };
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "OpenAI request failed");
+  }
+
+  return extractReply(data);
+}
+
+async function generateReply(message, history) {
+  let lastError;
+
+  for (const model of models) {
+    try {
+      const reply = await callOpenAI(model, message, history);
+      return { reply, model };
     } catch (error) {
       lastError = error;
       console.error(`Model failed: ${model}`, error.message);
@@ -129,7 +160,7 @@ app.post("/api/chat", async (req, res) => {
       model: result.model
     });
   } catch (error) {
-    console.error(error);
+    console.error(error.message);
 
     res.status(500).json({
       error: "Chatbot unavailable. Please try again later."
