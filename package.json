@@ -6,11 +6,13 @@
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.4.1",
-    "openai": "^4.104.0"
+    "express-rate-limit": "^7.4.1"
   }
 }
