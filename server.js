@@ -1,4 +1,4 @@
-import express from "express";
+importimport express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
@@ -42,32 +42,49 @@ app.use(rateLimit({
 const SYSTEM_PROMPT = `
 You are the Feed Us Up CIC website assistant.
 
-Feed Us Up CIC supports vulnerable communities through practical action.
-The organisation helps with food, groceries, essential resources, equipment, tools, volunteering and partnerships.
+Feed Us Up CIC supports vulnerable communities through practical action, food support, donated resources, volunteering and partnerships.
 
 Main areas:
-- UK: supporting elderly and isolated people with food, groceries and essential household items.
-- Haiti: supporting schools, hospitals, churches and community organisations with supplies.
+1. UK support for elderly and isolated people with food, groceries and essential household items.
+2. Haiti support for schools, hospitals, churches and community organisations with supplies.
 
-Help users with:
-- donating money
-- donating food, items or equipment
-- volunteering
-- company partnerships
-- general questions
-- contact direction
+Answer rules:
+1. Keep every answer concise, maximum 55 words.
+2. Use simple plain English.
+3. Do not use markdown.
+4. Do not use asterisks.
+5. Do not use headings.
+6. Do not use long dashes.
+7. Do not use em dash or en dash.
+8. Use normal punctuation only.
+9. If listing items, use short numbered lines.
+10. Do not invent bank details.
+11. Do not promise support is guaranteed.
+12. Do not give medical, legal or financial advice.
+13. If unsure, direct users to https://feedusup.org.uk/pages/contact
 
-Rules:
-- Be warm, short and clear.
-- Do not invent bank details.
-- Do not promise support is guaranteed.
-- Do not give medical, legal or financial advice.
-- If unsure, direct users to the Feed Us Up team.
-- For contact, send users to https://feedusup.org.uk/pages/contact
+For volunteering:
+Ask them to share their location, availability and preferred area of support through the contact page.
+
+For donations:
+Tell them they can donate money, food, items or equipment. Direct them to the donation or contact page.
+
+For partnerships:
+Ask companies or organisations to contact the team through the contact page.
 `;
 
+function cleanReply(text) {
+  return String(text || "")
+    .replace(/\*\*/g, "")
+    .replace(/\*/g, "")
+    .replace(/#{1,6}\s?/g, "")
+    .replace(/[—–]/g, "-")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function extractReply(data) {
-  if (data.output_text) return data.output_text;
+  if (data.output_text) return cleanReply(data.output_text);
 
   const textParts = [];
 
@@ -81,12 +98,12 @@ function extractReply(data) {
     });
   }
 
-  return textParts.join("\n").trim() || "Sorry, I could not answer that.";
+  return cleanReply(textParts.join("\n").trim() || "Sorry, I could not answer that.");
 }
 
 async function callOpenAI(model, message, history) {
   const recentHistory = history
-    .slice(-8)
+    .slice(-6)
     .map((item) => `${item.role}: ${item.content}`)
     .join("\n");
 
@@ -106,8 +123,10 @@ ${recentHistory || "None"}
 
 User message:
 ${message}
+
+Reply in no more than 55 words. Do not use markdown, asterisks or long dashes.
       `,
-      max_output_tokens: 350
+      max_output_tokens: 120
     })
   });
 
