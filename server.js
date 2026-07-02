@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
+import fs from "fs";
 
 dotenv.config();
 
@@ -19,6 +20,24 @@ const models = [
   process.env.OPENAI_MODEL_SECONDARY || "gpt-5-mini",
   process.env.OPENAI_MODEL_FALLBACK || "gpt-5-mini"
 ];
+
+function loadFaqKnowledge() {
+  try {
+    const rawFaq = fs.readFileSync("./faq.json", "utf8");
+    const faqs = JSON.parse(rawFaq);
+
+    return faqs
+      .map((item, index) => {
+        return `${index + 1}. Q: ${item.question}\nA: ${item.answer}`;
+      })
+      .join("\n\n");
+  } catch (error) {
+    console.error("FAQ file could not be loaded:", error.message);
+    return "";
+  }
+}
+
+const FAQ_KNOWLEDGE = loadFaqKnowledge();
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -41,6 +60,9 @@ app.use(rateLimit({
 
 const SYSTEM_PROMPT = `
 You are the Feed Us Up CIC website assistant.
+
+Use this approved FAQ knowledge base when answering:
+${FAQ_KNOWLEDGE}
 
 Feed Us Up CIC supports vulnerable communities through practical action, food support, donated resources, volunteering and partnerships.
 
@@ -158,7 +180,8 @@ async function generateReply(message, history) {
 app.get("/", (req, res) => {
   res.json({
     status: "Feed Us Up chatbot backend is running",
-    models
+    models,
+    faqLoaded: Boolean(FAQ_KNOWLEDGE)
   });
 });
 
