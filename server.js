@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
-import fs from "fs";
 
 dotenv.config();
 
@@ -20,24 +19,6 @@ const models = [
   process.env.OPENAI_MODEL_SECONDARY || "gpt-5-mini",
   process.env.OPENAI_MODEL_FALLBACK || "gpt-5-mini"
 ];
-
-function loadFaqKnowledge() {
-  try {
-    const rawFaq = fs.readFileSync("./faq.json", "utf8");
-    const faqs = JSON.parse(rawFaq);
-
-    return faqs
-      .map((item, index) => {
-        return `${index + 1}. Q: ${item.question}\nA: ${item.answer}`;
-      })
-      .join("\n\n");
-  } catch (error) {
-    console.error("FAQ file could not be loaded:", error.message);
-    return "";
-  }
-}
-
-const FAQ_KNOWLEDGE = loadFaqKnowledge();
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -58,11 +39,43 @@ app.use(rateLimit({
   legacyHeaders: false
 }));
 
-const SYSTEM_PROMPT = `
+let faqCache = "";
+let faqCacheTime = 0;
+const FAQ_CACHE_MS = 5 * 60 * 1000;
+
+async function loadFaqKnowledge() {
+  const now = Date.now();
+
+  if (faqCache && now - faqCacheTime < FAQ_CACHE_MS) {
+    return faqCache;
+  }
+
+  try {
+    const response = await fetch(process.env.FAQ_API_URL);
+    const faqs = await response.json();
+
+    faqCache = faqs
+      .filter((item) => item.question && item.answer)
+      .map((item, index) => {
+        return `${index + 1}. Q: ${item.question}\nA: ${item.answer}`;
+      })
+      .join("\n\n");
+
+    faqCacheTime = now;
+
+    return faqCache;
+  } catch (error) {
+    console.error("FAQ API could not be loaded:", error.message);
+    return faqCache || "";
+  }
+}
+
+function buildSystemPrompt(faqKnowledge) {
+  return `
 You are the Feed Us Up CIC website assistant.
 
 Use this approved FAQ knowledge base when answering:
-${FAQ_KNOWLEDGE}
+${faqKnowledge}
 
 Feed Us Up CIC supports vulnerable communities through practical action, food support, donated resources, volunteering and partnerships.
 
@@ -84,16 +97,8 @@ Answer rules:
 11. Do not promise support is guaranteed.
 12. Do not give medical, legal or financial advice.
 13. If unsure, direct users to https://feedusup.org.uk/pages/contact
-
-For volunteering:
-Ask them to share their location, availability and preferred area of support through the contact page.
-
-For donations:
-Tell them they can donate money, food, items or equipment. Direct them to the donation or contact page.
-
-For partnerships:
-Ask companies or organisations to contact the team through the contact page.
 `;
+}
 
 function cleanReply(text) {
   return String(text || "")
@@ -129,6 +134,9 @@ async function callOpenAI(model, message, history) {
     .map((item) => `${item.role}: ${item.content}`)
     .join("\n");
 
+  const faqKnowledge = await loadFaqKnowledge();
+  const systemPrompt = buildSystemPrompt(faqKnowledge);
+
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -138,7 +146,7 @@ async function callOpenAI(model, message, history) {
     },
     body: JSON.stringify({
       model,
-      instructions: SYSTEM_PROMPT,
+      instructions: systemPrompt,
       input: `
 Previous conversation:
 ${recentHistory || "None"}
@@ -177,11 +185,14 @@ async function generateReply(message, history) {
   throw lastError;
 }
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
+  const faqKnowledge = await loadFaqKnowledge();
+
   res.json({
     status: "Feed Us Up chatbot backend is running",
     models,
-    faqLoaded: Boolean(FAQ_KNOWLEDGE)
+    faqConnected: Boolean(process.env.FAQ_API_URL),
+    faqLoaded: Boolean(faqKnowledge)
   });
 });
 
